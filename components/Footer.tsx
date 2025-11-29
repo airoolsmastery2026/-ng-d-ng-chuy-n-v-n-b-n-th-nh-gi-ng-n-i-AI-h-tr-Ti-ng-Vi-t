@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Facebook, Youtube, MessageCircle, Info, BookOpen, X, Lightbulb, List, Layers, Mic, Volume2, Fingerprint, Code2, Globe } from 'lucide-react';
 
@@ -13,20 +14,25 @@ const Footer: React.FC = () => {
           {/* 3-COLUMN LAYOUT */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
             
-            {/* COLUMN 1: INFO - REVERTED TO ORIGINAL PLACEHOLDER TEXT */}
+            {/* COLUMN 1: MỤC TIÊU */}
             <div className="space-y-4">
               <h3 className="text-brand-gold font-bold text-lg flex items-center gap-2">
                 <Info size={20} />
-                Thông tin
+                Mục tiêu
               </h3>
               <div className="text-gray-400 text-sm space-y-3">
-                <p className="flex items-center gap-2">
-                  <Code2 size={16} className="text-gray-500" />
-                  <span>Nhà phát triển: [Tên nhà phát triển]</span>
+                <p className="flex items-center gap-2 font-bold text-white">
+                  <Code2 size={16} className="text-brand-gold" />
+                  <span>Nhà phát triển: [NGUYỄN HỮU HƯƠNG]</span>
                 </p>
-                <p className="leading-relaxed opacity-80">
-                  Mục tiêu: Hỗ trợ creator, giáo viên, marketer tạo giọng đọc AI chất lượng cao miễn phí.
-                </p>
+                <div className="leading-relaxed opacity-90 space-y-2 text-justify">
+                  <p>
+                    Đây là ứng dụng "All-in-One"
+                  </p>
+                  <p className="text-gray-300">
+                    Mục tiêu: Hỗ trợ creator, giáo viên, marketer, youtuber, tiktoker, tạo giọng đọc AI chất lượng cao miễn phí. giúp bạn chuyển đổi qua lại giữa Văn bản và Giọng nói một cách chuyên nghiệp. Không cần cài đặt phần mềm nặng máy, mọi thứ đều hoạt động ngay trên trình duyệt của bạn.
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -84,14 +90,14 @@ const Footer: React.FC = () => {
               </div>
             </div>
 
-            {/* COLUMN 3: GUIDE */}
-            <div className="space-y-4 flex flex-col items-start md:items-end">
+            {/* COLUMN 3: GUIDE - LEFT ALIGNED */}
+            <div className="space-y-4 flex flex-col items-start">
               <h3 className="text-brand-gold font-bold text-lg flex items-center gap-2">
                 <BookOpen size={20} />
                 Hỗ trợ
               </h3>
               
-              <p className="text-gray-400 text-sm text-left md:text-right">
+              <p className="text-gray-400 text-sm text-left">
                 Gặp khó khăn khi sử dụng? <br/> Xem hướng dẫn chi tiết bên dưới.
               </p>
 
