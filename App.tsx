@@ -17,7 +17,7 @@ import {
   UserApiKeys
 } from './types';
 import { generateSpeech, transcribeAudio, translateText } from './services/geminiService';
-import { generateGoogleSpeech, generateElevenLabsSpeech } from './services/externalTtsService';
+import { generateGoogleSpeech, generateElevenLabsSpeech, addElevenLabsVoice, getElevenLabsVoices } from './services/externalTtsService';
 import { createWavFile, convertPCMToAudioBuffer, createMp3Blob, mixAudioBuffers } from './utils/audioUtils';
 import { 
   Play, 
@@ -45,7 +45,11 @@ import {
   RefreshCcw,
   Merge,
   Save,
-  KeyRound
+  KeyRound,
+  PlusCircle,
+  Fingerprint,
+  ShieldAlert,
+  RefreshCw
 } from 'lucide-react';
 
 // Main Component
@@ -66,17 +70,50 @@ const App: React.FC = () => {
     return null;
   };
 
-  const loadApiKeys = (): UserApiKeys => {
+  const loadCustomVoices = (): VoiceOption[] => {
       try {
-          const keys = localStorage.getItem('user_api_keys');
-          if (keys) return JSON.parse(keys);
+          const saved = localStorage.getItem('custom_voices');
+          if (saved) return JSON.parse(saved);
       } catch (e) {}
-      return {};
+      return [];
+  };
+
+  const loadElevenLabsVoices = (): VoiceOption[] => {
+      try {
+          const saved = localStorage.getItem('elevenlabs_voices_cache');
+          if (saved) return JSON.parse(saved);
+      } catch(e) {}
+      return [];
   };
 
   const savedConfig = loadSavedConfig();
-  const [apiKeys, setApiKeys] = useState<UserApiKeys>(loadApiKeys());
+  
+  // Lazy load API keys
+  const [apiKeys, setApiKeys] = useState<UserApiKeys>(() => {
+      try {
+          const keys = localStorage.getItem('user_api_keys');
+          if (keys) return JSON.parse(keys);
+      } catch (e) {
+          console.error("Failed to load keys", e);
+      }
+      return {};
+  });
+
   const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [customVoices, setCustomVoices] = useState<VoiceOption[]>(loadCustomVoices());
+  const [fetchedElevenLabsVoices, setFetchedElevenLabsVoices] = useState<VoiceOption[]>(loadElevenLabsVoices());
+  const [isLoadingVoices, setIsLoadingVoices] = useState<boolean>(false);
+
+  // Save custom voices & fetched voices
+  useEffect(() => {
+    localStorage.setItem('custom_voices', JSON.stringify(customVoices));
+  }, [customVoices]);
+
+  useEffect(() => {
+      if (fetchedElevenLabsVoices.length > 0) {
+          localStorage.setItem('elevenlabs_voices_cache', JSON.stringify(fetchedElevenLabsVoices));
+      }
+  }, [fetchedElevenLabsVoices]);
 
   // TTS State
   const [text, setText] = useState<string>('');
@@ -90,10 +127,17 @@ const App: React.FC = () => {
   });
 
   const [selectedVoice, setSelectedVoice] = useState<VoiceOption>(() => {
-    // Check if saved voice ID exists in current voice list
+    // Check if saved voice ID exists in current voice list (including custom)
     if (savedConfig?.voiceId) {
+      // Check standard voices
       const foundVoice = ALL_VOICES.find(v => v.id === savedConfig.voiceId);
       if (foundVoice) return foundVoice;
+      // Check custom voices
+      const foundCustom = loadCustomVoices().find(v => v.id === savedConfig.voiceId);
+      if (foundCustom) return foundCustom;
+      // Check fetched elevenlabs voices
+      const foundFetched = loadElevenLabsVoices().find(v => v.id === savedConfig.voiceId);
+      if (foundFetched) return foundFetched;
     }
     return GEMINI_VOICES[0];
   });
@@ -160,6 +204,14 @@ const App: React.FC = () => {
   const [showDownloadConfirm, setShowDownloadConfirm] = useState<boolean>(false);
   const [downloadFormat, setDownloadFormat] = useState<'wav' | 'mp3'>('wav');
 
+  // Voice Cloning State
+  const [showCloneModal, setShowCloneModal] = useState<boolean>(false);
+  const [cloneName, setCloneName] = useState<string>('');
+  const [cloneDesc, setCloneDesc] = useState<string>('');
+  const [cloneFiles, setCloneFiles] = useState<File[]>([]);
+  const [isCloning, setIsCloning] = useState<boolean>(false);
+  const cloneFileInputRef = useRef<HTMLInputElement>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sttFileInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -177,8 +229,85 @@ const App: React.FC = () => {
       e.preventDefault();
       localStorage.setItem('user_api_keys', JSON.stringify(apiKeys));
       setShowSettings(false);
-      alert("Đã lưu cấu hình API Key!");
+      alert("Đã lưu cấu hình API Key vào trình duyệt của bạn!");
   };
+
+  const handleClearApiKeys = () => {
+      if (window.confirm("Bạn có chắc chắn muốn xóa toàn bộ API Key đã lưu? Bạn sẽ cần nhập lại chúng cho lần sử dụng sau.")) {
+        localStorage.removeItem('user_api_keys');
+        localStorage.removeItem('elevenlabs_voices_cache');
+        setApiKeys({});
+        setFetchedElevenLabsVoices([]);
+        alert("Đã xóa toàn bộ API Key và cache giọng đọc.");
+      }
+  };
+
+  const handleFetchElevenLabsVoices = async () => {
+      if (!apiKeys.elevenLabs) {
+          alert("Vui lòng nhập API Key trước khi tải danh sách giọng.");
+          return;
+      }
+      
+      setIsLoadingVoices(true);
+      try {
+          const voices = await getElevenLabsVoices(apiKeys.elevenLabs);
+          setFetchedElevenLabsVoices(voices);
+          alert(`Đã tải thành công ${voices.length} giọng từ tài khoản ElevenLabs của bạn!`);
+      } catch (error: any) {
+          console.error(error);
+          alert("Lỗi tải giọng: " + error.message);
+      } finally {
+          setIsLoadingVoices(false);
+      }
+  };
+
+  // --- Handlers for Voice Cloning ---
+  const handleCloneFilesSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files) {
+          setCloneFiles(Array.from(e.target.files));
+      }
+  };
+
+  const handleCloneSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!apiKeys.elevenLabs) {
+          alert("Vui lòng cấu hình ElevenLabs API Key trước.");
+          setShowSettings(true);
+          return;
+      }
+      if (!cloneName || cloneFiles.length === 0) {
+          alert("Vui lòng nhập tên và chọn ít nhất 1 file mẫu.");
+          return;
+      }
+
+      setIsCloning(true);
+      try {
+          const result = await addElevenLabsVoice(cloneName, cloneFiles, apiKeys.elevenLabs, cloneDesc);
+          
+          const newVoice: VoiceOption = {
+              id: result.voice_id,
+              name: `(Clone) ${cloneName}`,
+              gender: 'male', // Default, unknown
+              description: cloneDesc || 'Giọng nhân bản tùy chỉnh',
+              provider: 'elevenlabs'
+          };
+
+          // Update fetched voices to include new clone immediately
+          setFetchedElevenLabsVoices(prev => [newVoice, ...prev]);
+          setSelectedVoice(newVoice);
+          setShowCloneModal(false);
+          setCloneName('');
+          setCloneDesc('');
+          setCloneFiles([]);
+          alert("Tạo giọng thành công! Giọng mới đã được chọn.");
+
+      } catch (error: any) {
+          alert("Lỗi tạo giọng: " + error.message);
+      } finally {
+          setIsCloning(false);
+      }
+  };
+
 
   // --- Handlers for TTS Single ---
 
@@ -732,6 +861,112 @@ const App: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  // Helper render for Batch Queue to avoid duplication
+  const renderBatchQueue = () => (
+      <div className="w-full h-full flex flex-col">
+            {/* STATUS AREA (30%) */}
+            <div className="h-[30%] min-h-[120px] flex flex-col items-center justify-center border-b border-gray-700 mb-4 pb-4">
+            {batchQueue.length === 0 ? (
+                <div className="text-gray-500 text-center">
+                    <Layers size={40} className="mx-auto mb-2 text-gray-600" />
+                    <p className="text-sm">Danh sách trống</p>
+                </div>
+            ) : (
+                <div className="text-center">
+                        <div className="w-16 h-16 rounded-full bg-brand-blue mx-auto mb-3 flex items-center justify-center relative">
+                        {isBatchProcessing && (
+                            <>
+                                <div className="absolute inset-0 border-4 border-brand-gold/30 rounded-full"></div>
+                                <div className="absolute inset-0 border-4 border-brand-gold rounded-full border-t-transparent animate-spin"></div>
+                            </>
+                        )}
+                        <FolderArchive size={24} className={isBatchProcessing ? "text-brand-gold" : "text-gray-400"} />
+                    </div>
+                    <h3 className="text-lg font-medium text-white">
+                        {isBatchProcessing 
+                            ? `Đang xử lý ${batchQueue.filter(i => i.status === 'completed').length}/${batchQueue.length}...` 
+                            : batchQueue.some(i => i.status === 'completed') ? "Hoàn tất xử lý" : "Sẵn sàng"}
+                    </h3>
+                </div>
+            )}
+        </div>
+
+        {/* QUEUE LIST AREA (70%) */}
+        <div className="flex-grow overflow-y-auto pr-1">
+            {batchQueue.length > 0 && (
+                <div className="flex flex-col gap-2">
+                    <div className="flex justify-between items-center text-xs text-gray-400 px-2 sticky top-0 bg-brand-blueLight pb-2 z-10">
+                        <span>Danh sách file ({batchQueue.length})</span>
+                        {!isBatchProcessing && (
+                            <button onClick={clearBatchQueue} className="text-red-400 hover:text-red-300 flex items-center gap-1">
+                                <Trash2 size={12} /> Xóa
+                            </button>
+                        )}
+                    </div>
+                    {batchQueue.map((item, index) => (
+                        <div key={item.id} className="bg-brand-blue border border-gray-700 rounded-lg p-3 flex items-center justify-between gap-3 hover:border-gray-500 transition-colors">
+                            <div className="flex items-center gap-3 overflow-hidden flex-grow">
+                                <span className="text-xs font-mono text-gray-500 w-6">{(index + 1).toString().padStart(2, '0')}</span>
+                                <div className="min-w-0 flex-grow">
+                                    <p className="text-sm font-medium truncate text-gray-200">{item.file.name}</p>
+                                    <div className="w-full bg-gray-700 h-1.5 rounded-full mt-1.5 overflow-hidden">
+                                        <div 
+                                            className={`h-full rounded-full transition-all duration-300 ${item.status === 'error' ? 'bg-red-500' : 'bg-brand-gold'}`} 
+                                            style={{ width: `${item.progress}%` }}
+                                        ></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex-shrink-0 flex items-center gap-2">
+                                {item.status === 'pending' && <span className="text-[10px] text-gray-500">Chờ...</span>}
+                                {item.status === 'processing' && <Loader2 size={14} className="text-brand-gold animate-spin" />}
+                                {item.status === 'error' && <AlertCircle size={14} className="text-red-500" />}
+                                
+                                {item.status === 'completed' && (
+                                    <>
+                                        {appMode === 'TTS' ? (
+                                            <>
+                                                <button 
+                                                    onClick={() => handleBatchItemDownload(item, 'mp3')}
+                                                    className="text-[10px] bg-brand-gold text-brand-blue px-2 py-1 rounded font-bold hover:bg-brand-goldHover flex items-center gap-1"
+                                                    title="Tải MP3"
+                                                >
+                                                    <Music size={10} /> MP3
+                                                </button>
+                                                <button 
+                                                    onClick={() => handleBatchItemDownload(item, 'wav')}
+                                                    className="text-[10px] bg-gray-700 text-gray-200 px-2 py-1 rounded hover:bg-gray-600 flex items-center gap-1"
+                                                    title="Tải WAV"
+                                                >
+                                                    <FileAudio size={10} /> WAV
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <button 
+                                                onClick={() => handleBatchItemDownload(item, 'txt')}
+                                                className="text-[10px] bg-brand-gold text-brand-blue px-2 py-1 rounded font-bold hover:bg-brand-goldHover flex items-center gap-1"
+                                                title="Tải TXT"
+                                            >
+                                                <Download size={10} /> TXT
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                                
+                                {!isBatchProcessing && item.status === 'pending' && (
+                                    <button onClick={() => removeBatchItem(item.id)} className="ml-2 text-gray-600 hover:text-red-400">
+                                        <X size={14} />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    </div>
+  );
+
 
   return (
     <div className="min-h-screen bg-brand-blue font-sans text-brand-text flex flex-col relative">
@@ -743,14 +978,22 @@ const App: React.FC = () => {
         <div className="flex justify-center mb-8 relative">
             <div className="bg-brand-blueLight border border-gray-600 p-1 rounded-xl inline-flex gap-1">
                 <button
-                    onClick={() => setAppMode('TTS')}
+                    onClick={() => {
+                        setAppMode('TTS');
+                        setIsBatchMode(false);
+                        setBatchQueue([]);
+                    }}
                     className={`px-6 py-2 rounded-lg font-medium text-sm sm:text-base transition-all flex items-center gap-2 ${appMode === 'TTS' ? 'bg-brand-gold text-brand-blue shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
                 >
                     <Volume2 size={18} />
                     Văn bản → Giọng nói
                 </button>
                 <button
-                    onClick={() => setAppMode('STT')}
+                    onClick={() => {
+                        setAppMode('STT');
+                        setIsBatchMode(false);
+                        setBatchQueue([]);
+                    }}
                     className={`px-6 py-2 rounded-lg font-medium text-sm sm:text-base transition-all flex items-center gap-2 ${appMode === 'STT' ? 'bg-brand-gold text-brand-blue shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
                 >
                     <Mic size={18} />
@@ -770,10 +1013,10 @@ const App: React.FC = () => {
 
         {appMode === 'TTS' ? (
             /* ================= TTS UI ================= */
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
             
             {/* LEFT COLUMN: CONFIGURATION */}
-            <div className="space-y-6 bg-brand-blueLight p-6 rounded-2xl shadow-xl border border-gray-700 animate-fade-in">
+            <div className="space-y-6 bg-brand-blueLight p-6 rounded-2xl shadow-xl border border-gray-700">
                 
                 <div className="flex justify-between items-start">
                     <h2 className="text-2xl font-bold text-brand-gold mb-4 flex items-center gap-2">
@@ -784,7 +1027,10 @@ const App: React.FC = () => {
                     {/* Switch Single/Batch Mode */}
                     <button 
                         onClick={() => {
-                            if (!isBatchProcessing) setIsBatchMode(!isBatchMode);
+                            if (!isBatchProcessing) {
+                                setIsBatchMode(!isBatchMode);
+                                setBatchQueue([]);
+                            }
                         }}
                         disabled={isBatchProcessing}
                         className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded-full border transition-all ${isBatchMode ? 'bg-brand-gold text-brand-blue border-brand-gold' : 'text-gray-400 border-gray-600 hover:border-gray-400'}`}
@@ -814,7 +1060,16 @@ const App: React.FC = () => {
 
                     <div className="space-y-2">
                         <div className="flex justify-between items-center min-h-[36px]">
-                        <label className="text-sm font-medium text-gray-300">Giọng đọc</label>
+                        <label className="text-sm font-medium text-gray-300 flex items-center gap-2">
+                            Giọng đọc
+                            <button 
+                                onClick={() => setShowCloneModal(true)}
+                                className="text-[10px] bg-gray-700 hover:bg-gray-600 px-2 py-0.5 rounded text-brand-gold flex items-center gap-1 transition-colors"
+                                title="Tạo giọng mới từ mẫu (ElevenLabs)"
+                            >
+                                <PlusCircle size={10} /> Clone
+                            </button>
+                        </label>
                         <button 
                             type="button"
                             onClick={handlePreviewVoice}
@@ -828,8 +1083,22 @@ const App: React.FC = () => {
                         <select 
                         value={selectedVoice.id}
                         onChange={(e) => {
-                            const v = ALL_VOICES.find(vo => vo.id === e.target.value);
-                            if (v) setSelectedVoice(v);
+                             // Check standard voices
+                             const v = ALL_VOICES.find(vo => vo.id === e.target.value);
+                             if (v) {
+                                 setSelectedVoice(v);
+                             } else {
+                                 // Check custom/fetched voices
+                                 const vc = customVoices.find(vo => vo.id === e.target.value);
+                                 if (vc) {
+                                     setSelectedVoice(vc);
+                                     return;
+                                 }
+                                 const vf = fetchedElevenLabsVoices.find(vo => vo.id === e.target.value);
+                                 if (vf) {
+                                     setSelectedVoice(vf);
+                                 }
+                             }
                         }}
                         className="w-full bg-brand-blue border border-gray-600 rounded-lg p-3 focus:ring-2 focus:ring-brand-gold focus:outline-none"
                         disabled={isBatchProcessing}
@@ -845,10 +1114,22 @@ const App: React.FC = () => {
                                 ))}
                             </optgroup>
                             <optgroup label="ElevenLabs (Cao cấp - Yêu cầu API Key)">
-                                {ELEVENLABS_VOICES.map((voice) => (
-                                    <option key={voice.id} value={voice.id}>{voice.name}</option>
-                                ))}
+                                {fetchedElevenLabsVoices.length > 0 
+                                    ? fetchedElevenLabsVoices.map((voice) => (
+                                        <option key={voice.id} value={voice.id}>{voice.name}</option>
+                                      ))
+                                    : ELEVENLABS_VOICES.map((voice) => (
+                                        <option key={voice.id} value={voice.id}>{voice.name}</option>
+                                      ))
+                                }
                             </optgroup>
+                            {customVoices.length > 0 && (
+                                <optgroup label="Giọng Clone Mới (ElevenLabs)">
+                                    {customVoices.map((voice) => (
+                                        <option key={voice.id} value={voice.id}>{voice.name}</option>
+                                    ))}
+                                </optgroup>
+                            )}
                         </select>
                     </div>
                 </div>
@@ -967,7 +1248,7 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {/* ================= BATCH MODE UI ================= */}
+                {/* ================= BATCH MODE UI (TTS) ================= */}
                 {isBatchMode && (
                     <div className="space-y-4 animate-fade-in">
                         <div 
@@ -1008,7 +1289,7 @@ const App: React.FC = () => {
                             </label>
                         </div>
 
-                        {/* Batch List (Shared UI for both modes logic handled above) */}
+                        {/* Batch Start Button */}
                         <div className="pt-4 border-t border-gray-700/50">
                              <button
                                 onClick={processBatchQueue}
@@ -1046,114 +1327,13 @@ const App: React.FC = () => {
                 <div className="bg-brand-blueLight p-6 rounded-2xl shadow-xl border border-gray-700 h-full flex flex-col animate-fade-in">
                 <h2 className="text-2xl font-bold text-brand-gold mb-6 flex items-center gap-2">
                     <Volume2 />
-                    Kết quả giọng nói
+                    {isBatchMode ? 'Danh sách xử lý' : 'Kết quả giọng nói'}
                 </h2>
 
                 <div className="flex-grow flex flex-col items-center justify-center space-y-8 py-4">
                     {/* BATCH MODE RESULT VIEW */}
                     {isBatchMode ? (
-                        <div className="w-full h-full flex flex-col">
-                            {/* STATUS AREA (30%) */}
-                            <div className="h-[30%] min-h-[120px] flex flex-col items-center justify-center border-b border-gray-700 mb-4 pb-4">
-                                {batchQueue.length === 0 ? (
-                                    <div className="text-gray-500 text-center">
-                                        <Layers size={40} className="mx-auto mb-2 text-gray-600" />
-                                        <p className="text-sm">Danh sách trống</p>
-                                    </div>
-                                ) : (
-                                    <div className="text-center">
-                                         <div className="w-16 h-16 rounded-full bg-brand-blue mx-auto mb-3 flex items-center justify-center relative">
-                                            {isBatchProcessing && (
-                                                <>
-                                                    <div className="absolute inset-0 border-4 border-brand-gold/30 rounded-full"></div>
-                                                    <div className="absolute inset-0 border-4 border-brand-gold rounded-full border-t-transparent animate-spin"></div>
-                                                </>
-                                            )}
-                                            <FolderArchive size={24} className={isBatchProcessing ? "text-brand-gold" : "text-gray-400"} />
-                                        </div>
-                                        <h3 className="text-lg font-medium text-white">
-                                            {isBatchProcessing 
-                                                ? `Đang xử lý ${batchQueue.filter(i => i.status === 'completed').length}/${batchQueue.length}...` 
-                                                : batchQueue.some(i => i.status === 'completed') ? "Hoàn tất xử lý" : "Sẵn sàng"}
-                                        </h3>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* QUEUE LIST AREA (70%) */}
-                            <div className="flex-grow overflow-y-auto pr-1">
-                                {batchQueue.length > 0 && (
-                                    <div className="flex flex-col gap-2">
-                                        <div className="flex justify-between items-center text-xs text-gray-400 px-2 sticky top-0 bg-brand-blueLight pb-2 z-10">
-                                            <span>Danh sách file ({batchQueue.length})</span>
-                                            {!isBatchProcessing && (
-                                                <button onClick={clearBatchQueue} className="text-red-400 hover:text-red-300 flex items-center gap-1">
-                                                    <Trash2 size={12} /> Xóa
-                                                </button>
-                                            )}
-                                        </div>
-                                        {batchQueue.map((item, index) => (
-                                            <div key={item.id} className="bg-brand-blue border border-gray-700 rounded-lg p-3 flex items-center justify-between gap-3 hover:border-gray-500 transition-colors">
-                                                <div className="flex items-center gap-3 overflow-hidden flex-grow">
-                                                    <span className="text-xs font-mono text-gray-500 w-6">{(index + 1).toString().padStart(2, '0')}</span>
-                                                    <div className="min-w-0 flex-grow">
-                                                        <p className="text-sm font-medium truncate text-gray-200">{item.file.name}</p>
-                                                        <div className="w-full bg-gray-700 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                                                            <div 
-                                                                className={`h-full rounded-full transition-all duration-300 ${item.status === 'error' ? 'bg-red-500' : 'bg-brand-gold'}`} 
-                                                                style={{ width: `${item.progress}%` }}
-                                                            ></div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="flex-shrink-0 flex items-center gap-2">
-                                                    {item.status === 'pending' && <span className="text-[10px] text-gray-500">Chờ...</span>}
-                                                    {item.status === 'processing' && <Loader2 size={14} className="text-brand-gold animate-spin" />}
-                                                    {item.status === 'error' && <AlertCircle size={14} className="text-red-500" />}
-                                                    
-                                                    {item.status === 'completed' && appMode === 'TTS' && (
-                                                        <div className="flex items-center gap-1">
-                                                            <button 
-                                                                onClick={() => handleBatchItemDownload(item, 'mp3')}
-                                                                className="text-[10px] bg-brand-gold text-brand-blue px-2 py-1 rounded font-bold hover:bg-brand-goldHover flex items-center gap-1"
-                                                                title="Tải MP3"
-                                                            >
-                                                                <Music size={10} /> MP3
-                                                            </button>
-                                                            <button 
-                                                                onClick={() => handleBatchItemDownload(item, 'wav')}
-                                                                className="text-[10px] bg-gray-700 text-gray-200 px-2 py-1 rounded hover:bg-gray-600 flex items-center gap-1"
-                                                                title="Tải WAV"
-                                                            >
-                                                                <FileAudio size={10} /> WAV
-                                                            </button>
-                                                        </div>
-                                                    )}
-
-                                                     {item.status === 'completed' && appMode === 'STT' && (
-                                                        <div className="flex items-center gap-1">
-                                                            <button 
-                                                                onClick={() => handleBatchItemDownload(item, 'txt')}
-                                                                className="text-[10px] bg-brand-blue border border-gray-600 text-gray-200 px-2 py-1 rounded hover:bg-gray-700 flex items-center gap-1"
-                                                                title="Tải TXT"
-                                                            >
-                                                                <FileText size={10} /> TXT
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                    
-                                                    {!isBatchProcessing && item.status === 'pending' && (
-                                                        <button onClick={() => removeBatchItem(item.id)} className="ml-2 text-gray-600 hover:text-red-400">
-                                                            <X size={14} />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                        renderBatchQueue()
                     ) : (
                         /* SINGLE MODE RESULT VIEW */
                         <>
@@ -1302,17 +1482,22 @@ const App: React.FC = () => {
             </div>
         ) : (
             /* ================= STT UI ================= */
-            <div className="grid grid-cols-1 gap-8 animate-fade-in">
-                <div className="bg-brand-blueLight p-6 rounded-2xl shadow-xl border border-gray-700">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
+                
+                {/* LEFT COLUMN: UPLOAD / CONFIG */}
+                <div className="space-y-6 bg-brand-blueLight p-6 rounded-2xl shadow-xl border border-gray-700">
                      <div className="flex justify-between items-start">
                         <h2 className="text-2xl font-bold text-brand-gold mb-6 flex items-center gap-2">
                             <FileAudio />
-                            Upload File Âm thanh
+                            {isBatchMode ? 'Upload Hàng Loạt' : 'Upload File Âm thanh'}
                         </h2>
                          {/* Switch Single/Batch Mode STT */}
                         <button 
                             onClick={() => {
-                                if (!isBatchProcessing) setIsBatchMode(!isBatchMode);
+                                if (!isBatchProcessing) {
+                                    setIsBatchMode(!isBatchMode);
+                                    setBatchQueue([]);
+                                }
                             }}
                             disabled={isBatchProcessing}
                             className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded-full border transition-all ${isBatchMode ? 'bg-brand-gold text-brand-blue border-brand-gold' : 'text-gray-400 border-gray-600 hover:border-gray-400'}`}
@@ -1323,233 +1508,193 @@ const App: React.FC = () => {
                     </div>
 
                     {!isBatchMode ? (
-                        /* SINGLE STT MODE */
-                        <div className="flex flex-col md:flex-row gap-8">
-                            {/* Upload Section */}
-                            <div className="w-full md:w-1/3 space-y-4">
-                                <div className="border-2 border-dashed border-gray-600 rounded-xl p-6 flex flex-col items-center justify-center text-center gap-4 hover:border-brand-gold transition-colors bg-brand-blue/50 h-64">
-                                    <input 
-                                        type="file" 
-                                        accept="audio/*,video/*"
-                                        ref={sttFileInputRef}
-                                        onChange={handleSttFileChange}
-                                        className="hidden" 
-                                        id="stt-upload"
-                                    />
-                                    {sttFile ? (
-                                        <div className="space-y-4 w-full">
-                                            <div className="w-16 h-16 bg-brand-gold/20 rounded-full flex items-center justify-center mx-auto">
-                                                <FileAudio size={32} className="text-brand-gold" />
-                                            </div>
-                                            <div>
-                                                <p className="font-bold text-white truncate max-w-full px-2">{sttFile.name}</p>
-                                                <p className="text-sm text-gray-400">{(sttFile.size / 1024 / 1024).toFixed(2)} MB</p>
-                                            </div>
-                                            <audio controls className="w-full h-8 mt-2" src={URL.createObjectURL(sttFile)} />
-                                            <button 
-                                                onClick={() => {
-                                                    setSttFile(null);
-                                                    setSttFileBase64(null);
-                                                    setSttResult('');
-                                                    if(sttFileInputRef.current) sttFileInputRef.current.value = '';
-                                                }}
-                                                className="text-sm text-red-400 hover:text-red-300 hover:underline"
-                                            >
-                                                Xóa file
-                                            </button>
+                        /* SINGLE STT MODE LEFT */
+                        <div className="space-y-4">
+                            <div className="border-2 border-dashed border-gray-600 rounded-xl p-6 flex flex-col items-center justify-center text-center gap-4 hover:border-brand-gold transition-colors bg-brand-blue/50 h-64">
+                                <input 
+                                    type="file" 
+                                    accept="audio/*,video/*"
+                                    ref={sttFileInputRef}
+                                    onChange={handleSttFileChange}
+                                    className="hidden" 
+                                    id="stt-upload"
+                                />
+                                {sttFile ? (
+                                    <div className="space-y-4 w-full">
+                                        <div className="w-16 h-16 bg-brand-gold/20 rounded-full flex items-center justify-center mx-auto">
+                                            <FileAudio size={32} className="text-brand-gold" />
                                         </div>
-                                    ) : (
-                                        <>
-                                            <div className="w-16 h-16 bg-gray-700 rounded-full flex items-center justify-center">
-                                                <Mic size={32} className="text-gray-400" />
-                                            </div>
-                                            <label 
-                                                htmlFor="stt-upload"
-                                                className="cursor-pointer bg-brand-gold text-brand-blue px-6 py-2 rounded-lg font-bold hover:bg-brand-goldHover transition-colors"
-                                            >
-                                                Chọn file
-                                            </label>
-                                            <p className="text-sm text-gray-500">Hỗ trợ MP3, WAV, M4A, MP4... (Max 100MB)</p>
-                                        </>
-                                    )}
-                                </div>
-
-                                <button
-                                    onClick={handleTranscribe}
-                                    disabled={!sttFile || loadingState === LoadingState.PROCESSING}
-                                    className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all
-                                        ${loadingState === LoadingState.PROCESSING 
-                                        ? 'bg-gray-600 cursor-not-allowed text-gray-300' 
-                                        : 'bg-brand-gold text-brand-blue hover:scale-105'}
-                                    `}
-                                >
-                                    {loadingState === LoadingState.PROCESSING ? (
-                                        <>
-                                            <Loader2 className="animate-spin" />
-                                            Đang phân tích...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Wand2 />
-                                            Chuyển thành văn bản
-                                        </>
-                                    )}
-                                </button>
-                                {errorMessage && (
-                                    <div className="bg-red-900/50 border border-red-500 text-red-200 p-3 rounded-lg flex items-start gap-2 text-sm">
-                                        <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-                                        <span>{errorMessage}</span>
+                                        <div>
+                                            <p className="font-bold text-white truncate max-w-full px-2">{sttFile.name}</p>
+                                            <p className="text-sm text-gray-400">{(sttFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                                        </div>
+                                        <audio controls className="w-full h-8 mt-2" src={URL.createObjectURL(sttFile)} />
+                                        <button 
+                                            onClick={() => {
+                                                setSttFile(null);
+                                                setSttFileBase64(null);
+                                                setSttResult('');
+                                                if(sttFileInputRef.current) sttFileInputRef.current.value = '';
+                                            }}
+                                            className="text-sm text-red-400 hover:text-red-300 hover:underline"
+                                        >
+                                            Xóa file
+                                        </button>
                                     </div>
+                                ) : (
+                                    <>
+                                        <div className="w-16 h-16 bg-gray-700 rounded-full flex items-center justify-center">
+                                            <Mic size={32} className="text-gray-400" />
+                                        </div>
+                                        <label 
+                                            htmlFor="stt-upload"
+                                            className="cursor-pointer bg-brand-gold text-brand-blue px-6 py-2 rounded-lg font-bold hover:bg-brand-goldHover transition-colors"
+                                        >
+                                            Chọn file
+                                        </label>
+                                        <p className="text-sm text-gray-500">Hỗ trợ MP3, WAV, M4A, MP4... (Max 100MB)</p>
+                                    </>
                                 )}
                             </div>
 
-                            {/* Result Section */}
-                            <div className="w-full md:w-2/3 flex flex-col h-[500px]">
-                                <div className="flex justify-between items-center mb-2">
-                                    <label className="text-sm font-medium text-gray-300">Nội dung văn bản trích xuất</label>
-                                    {sttResult && (
-                                        <div className="flex gap-2">
-                                            <button 
-                                                onClick={handleCopyStt}
-                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
-                                            >
-                                                {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                                                {copied ? 'Đã sao chép' : 'Sao chép'}
-                                            </button>
-                                            <button 
-                                                onClick={handleDownloadStt}
-                                                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded bg-brand-blue hover:bg-gray-800 border border-gray-600 text-gray-200 transition-colors"
-                                            >
-                                                <Download size={14} />
-                                                Tải TXT
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-                                <textarea 
-                                    readOnly
-                                    value={sttResult}
-                                    placeholder="Kết quả sẽ hiển thị ở đây sau khi xử lý..."
-                                    className="w-full flex-grow bg-brand-blue border border-gray-600 rounded-xl p-4 text-base leading-relaxed focus:ring-2 focus:ring-brand-gold focus:outline-none resize-none font-mono text-gray-300"
-                                />
-                            </div>
+                            <button
+                                onClick={handleTranscribe}
+                                disabled={!sttFile || loadingState === LoadingState.PROCESSING}
+                                className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all
+                                    ${loadingState === LoadingState.PROCESSING 
+                                    ? 'bg-gray-600 cursor-not-allowed text-gray-300' 
+                                    : 'bg-brand-gold text-brand-blue hover:scale-105'}
+                                `}
+                            >
+                                {loadingState === LoadingState.PROCESSING ? (
+                                    <>
+                                        <Loader2 className="animate-spin" />
+                                        Đang phân tích...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Wand2 />
+                                        Chuyển thành văn bản
+                                    </>
+                                )}
+                            </button>
                         </div>
                     ) : (
-                        /* BATCH STT MODE */
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                            <div className="space-y-4">
-                                <div 
-                                    onDragOver={handleBatchDragOver}
-                                    onDragLeave={handleBatchDragLeave}
-                                    onDrop={handleBatchDrop}
-                                    className={`
-                                        rounded-xl p-4 flex flex-col items-center justify-center border-dashed min-h-[150px] transition-all duration-200
-                                        ${isDraggingBatch 
-                                            ? 'bg-brand-gold/10 border-2 border-brand-gold scale-[1.02]' 
-                                            : 'bg-brand-blue/30 border border-gray-600'
-                                        }
+                        /* BATCH STT MODE LEFT */
+                        <div className="space-y-4 animate-fade-in">
+                             <div 
+                                onDragOver={handleBatchDragOver}
+                                onDragLeave={handleBatchDragLeave}
+                                onDrop={handleBatchDrop}
+                                className={`
+                                    rounded-xl p-4 flex flex-col items-center justify-center border-dashed min-h-[150px] transition-all duration-200
+                                    ${isDraggingBatch 
+                                        ? 'bg-brand-gold/10 border-2 border-brand-gold scale-[1.02]' 
+                                        : 'bg-brand-blue/30 border border-gray-600'
+                                    }
+                                `}
+                            >
+                                <input 
+                                    type="file" 
+                                    accept="audio/*,video/*"
+                                    multiple
+                                    ref={batchFileInputRef}
+                                    onChange={handleBatchFilesSelect}
+                                    className="hidden" 
+                                    id="batch-upload-stt"
+                                    disabled={isBatchProcessing}
+                                />
+                                <label 
+                                    htmlFor="batch-upload-stt"
+                                    className={`cursor-pointer flex flex-col items-center gap-2 text-brand-gold hover:text-brand-goldHover transition-colors ${isBatchProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    {isDraggingBatch ? (
+                                        <UploadCloud size={32} className="animate-bounce" />
+                                    ) : (
+                                        <Layers size={32} />
+                                    )}
+                                    <span className="font-bold">
+                                        {isDraggingBatch ? "Thả file vào đây" : "Chọn hoặc Kéo thả nhiều file âm thanh"}
+                                    </span>
+                                    <span className="text-xs text-gray-400">Tự động trích xuất văn bản hàng loạt</span>
+                                </label>
+                            </div>
+
+                             <div className="pt-4 border-t border-gray-700/50">
+                                <button
+                                    onClick={processBatchQueue}
+                                    disabled={isBatchProcessing || batchQueue.length === 0}
+                                    className={`w-full py-3 rounded-lg font-bold text-brand-blue shadow-lg flex items-center justify-center gap-2 transform transition-all h-12
+                                        ${isBatchProcessing || batchQueue.length === 0 ? 'bg-gray-600 cursor-not-allowed text-gray-300' : 'bg-brand-gold hover:bg-brand-goldHover hover:scale-105'}
                                     `}
                                 >
-                                    <input 
-                                        type="file" 
-                                        accept="audio/*,video/*"
-                                        multiple
-                                        ref={batchFileInputRef}
-                                        onChange={handleBatchFilesSelect}
-                                        className="hidden" 
-                                        id="batch-upload-stt"
-                                        disabled={isBatchProcessing}
-                                    />
-                                    <label 
-                                        htmlFor="batch-upload-stt"
-                                        className={`cursor-pointer flex flex-col items-center gap-2 text-brand-gold hover:text-brand-goldHover transition-colors ${isBatchProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                    >
-                                        {isDraggingBatch ? (
-                                            <UploadCloud size={32} className="animate-bounce" />
-                                        ) : (
-                                            <Layers size={32} />
-                                        )}
-                                        <span className="font-bold">
-                                            {isDraggingBatch ? "Thả file vào đây" : "Chọn hoặc Kéo thả nhiều file âm thanh"}
-                                        </span>
-                                        <span className="text-xs text-gray-400">Tự động trích xuất văn bản hàng loạt</span>
-                                    </label>
-                                </div>
-                                <div className="pt-4 border-t border-gray-700/50">
-                                     <button
-                                        onClick={processBatchQueue}
-                                        disabled={isBatchProcessing || batchQueue.length === 0}
-                                        className={`w-full py-3 rounded-lg font-bold text-brand-blue shadow-lg flex items-center justify-center gap-2 transform transition-all h-12
-                                            ${isBatchProcessing || batchQueue.length === 0 ? 'bg-gray-600 cursor-not-allowed text-gray-300' : 'bg-brand-gold hover:bg-brand-goldHover hover:scale-105'}
-                                        `}
-                                    >
-                                        {isBatchProcessing ? (
-                                            <>
-                                                <Loader2 className="animate-spin" />
-                                                Đang xử lý hàng loạt...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Wand2 size={20} />
-                                                Bắt đầu trích xuất
-                                            </>
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-                            
-                            {/* BATCH RESULT LIST STT */}
-                            <div className="bg-brand-blue/30 rounded-xl p-4 border border-gray-700 h-[400px] flex flex-col">
-                                <h3 className="text-lg font-medium text-brand-gold mb-3 flex items-center gap-2">
-                                    <FolderArchive size={18} /> Danh sách xử lý
-                                </h3>
-                                <div className="flex-grow overflow-y-auto pr-2">
-                                     {batchQueue.length === 0 ? (
-                                        <div className="text-center text-gray-500 mt-10">
-                                            <Layers size={32} className="mx-auto mb-2 opacity-50" />
-                                            <p className="text-sm">Chưa có file nào</p>
-                                        </div>
+                                    {isBatchProcessing ? (
+                                        <>
+                                            <Loader2 className="animate-spin" />
+                                            Đang xử lý hàng loạt...
+                                        </>
                                     ) : (
-                                        <div className="flex flex-col gap-2">
-                                            {batchQueue.map((item, index) => (
-                                                 <div key={item.id} className="bg-brand-blue border border-gray-700 rounded-lg p-3 flex items-center justify-between gap-3 hover:border-gray-500 transition-colors">
-                                                    <div className="flex items-center gap-3 overflow-hidden flex-grow">
-                                                        <span className="text-xs font-mono text-gray-500 w-6">{(index + 1).toString().padStart(2, '0')}</span>
-                                                        <div className="min-w-0 flex-grow">
-                                                            <p className="text-sm font-medium truncate text-gray-200">{item.file.name}</p>
-                                                            <div className="w-full bg-gray-700 h-1.5 rounded-full mt-1.5 overflow-hidden">
-                                                                <div 
-                                                                    className={`h-full rounded-full transition-all duration-300 ${item.status === 'error' ? 'bg-red-500' : 'bg-brand-gold'}`} 
-                                                                    style={{ width: `${item.progress}%` }}
-                                                                ></div>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex-shrink-0 flex items-center gap-2">
-                                                        {item.status === 'processing' && <Loader2 size={14} className="text-brand-gold animate-spin" />}
-                                                        {item.status === 'completed' && (
-                                                            <button 
-                                                                onClick={() => handleBatchItemDownload(item, 'txt')}
-                                                                className="text-[10px] bg-brand-blue border border-gray-600 text-gray-200 px-2 py-1 rounded hover:bg-gray-700 flex items-center gap-1"
-                                                            >
-                                                                <Download size={10} /> TXT
-                                                            </button>
-                                                        )}
-                                                         {!isBatchProcessing && item.status === 'pending' && (
-                                                            <button onClick={() => removeBatchItem(item.id)} className="text-gray-600 hover:text-red-400">
-                                                                <X size={14} />
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                 </div>
-                                            ))}
-                                        </div>
+                                        <>
+                                            <Wand2 size={20} />
+                                            Bắt đầu trích xuất
+                                        </>
                                     )}
-                                </div>
+                                </button>
                             </div>
                         </div>
                     )}
+                    
+                    {errorMessage && (
+                        <div className="bg-red-900/50 border border-red-500 text-red-200 p-3 rounded-lg flex items-start gap-2 text-sm mt-4">
+                            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+                            <span>{errorMessage}</span>
+                        </div>
+                    )}
                 </div>
+
+                {/* RIGHT COLUMN: RESULT / LIST */}
+                 <div className="bg-brand-blueLight p-6 rounded-2xl shadow-xl border border-gray-700 h-full flex flex-col animate-fade-in">
+                     <h2 className="text-2xl font-bold text-brand-gold mb-6 flex items-center gap-2">
+                        {isBatchMode ? <FolderArchive /> : <FileText />}
+                        {isBatchMode ? 'Danh sách xử lý' : 'Kết quả văn bản'}
+                    </h2>
+                    
+                    {!isBatchMode ? (
+                        /* SINGLE STT RESULT RIGHT */
+                        <div className="flex flex-col h-full">
+                            <div className="flex justify-between items-center mb-2">
+                                <label className="text-sm font-medium text-gray-300">Nội dung văn bản trích xuất</label>
+                                {sttResult && (
+                                    <div className="flex gap-2">
+                                        <button 
+                                            onClick={handleCopyStt}
+                                            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                                        >
+                                            {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                                            {copied ? 'Đã sao chép' : 'Sao chép'}
+                                        </button>
+                                        <button 
+                                            onClick={handleDownloadStt}
+                                            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded bg-brand-blue hover:bg-gray-800 border border-gray-600 text-gray-200 transition-colors"
+                                        >
+                                            <Download size={14} />
+                                            Tải TXT
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                            <textarea 
+                                readOnly
+                                value={sttResult}
+                                placeholder="Kết quả sẽ hiển thị ở đây sau khi xử lý..."
+                                className="w-full flex-grow bg-brand-blue border border-gray-600 rounded-xl p-4 text-base leading-relaxed focus:ring-2 focus:ring-brand-gold focus:outline-none resize-none font-mono text-gray-300 min-h-[300px]"
+                            />
+                        </div>
+                    ) : (
+                        /* BATCH STT QUEUE RIGHT */
+                        renderBatchQueue()
+                    )}
+                 </div>
             </div>
         )}
       </main>
@@ -1593,6 +1738,97 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* VOICE CLONING MODAL */}
+      {showCloneModal && (
+        <div 
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[70] p-4 animate-fade-in"
+            onClick={() => setShowCloneModal(false)}
+        >
+            <div 
+                className="bg-brand-blueLight border border-gray-600 rounded-xl p-6 max-w-lg w-full shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold text-brand-gold flex items-center gap-2">
+                        <Fingerprint size={24} /> Tạo giọng Clone (ElevenLabs)
+                    </h3>
+                    <button onClick={() => setShowCloneModal(false)} className="text-gray-400 hover:text-white">
+                        <X size={20} />
+                    </button>
+                </div>
+                
+                <p className="text-sm text-gray-400 mb-6">
+                    Tải lên các mẫu giọng nói (1-25 file) để tạo một bản sao giọng nói AI. Tính năng này yêu cầu ElevenLabs API Key.
+                </p>
+
+                <form onSubmit={handleCloneSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-300">Tên giọng mới <span className="text-red-400">*</span></label>
+                        <input 
+                            type="text" 
+                            required
+                            value={cloneName}
+                            onChange={e => setCloneName(e.target.value)}
+                            placeholder="Ví dụ: Giọng của tôi, Giọng đọc truyện..."
+                            className="w-full bg-brand-blue border border-gray-600 rounded-lg p-3 text-sm focus:ring-2 focus:ring-brand-gold focus:outline-none"
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-300">Mô tả (Tùy chọn)</label>
+                        <input 
+                            type="text" 
+                            value={cloneDesc}
+                            onChange={e => setCloneDesc(e.target.value)}
+                            placeholder="Ví dụ: Giọng trầm ấm, dùng cho tin tức..."
+                            className="w-full bg-brand-blue border border-gray-600 rounded-lg p-3 text-sm focus:ring-2 focus:ring-brand-gold focus:outline-none"
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium text-gray-300">File mẫu giọng (MP3, WAV...) <span className="text-red-400">*</span></label>
+                        <input 
+                            type="file" 
+                            multiple
+                            accept="audio/*"
+                            ref={cloneFileInputRef}
+                            onChange={handleCloneFilesSelect}
+                            className="hidden" 
+                            id="clone-files"
+                        />
+                         <label 
+                            htmlFor="clone-files"
+                            className="cursor-pointer flex flex-col items-center justify-center border-2 border-dashed border-gray-600 rounded-lg p-4 gap-2 hover:border-brand-gold hover:bg-brand-blue/50 transition-colors"
+                        >
+                            <UploadCloud size={24} className="text-gray-400" />
+                            <span className="text-sm font-medium text-gray-300">
+                                {cloneFiles.length > 0 ? `Đã chọn ${cloneFiles.length} file` : "Chọn file mẫu giọng"}
+                            </span>
+                        </label>
+                    </div>
+
+                    <div className="pt-4 flex justify-end gap-3">
+                         <button 
+                            type="button"
+                            onClick={() => setShowCloneModal(false)}
+                            className="px-4 py-2 rounded-lg text-gray-300 bg-gray-700 hover:bg-gray-600 transition-colors text-sm"
+                        >
+                            Hủy
+                        </button>
+                        <button 
+                            type="submit"
+                            disabled={isCloning}
+                            className={`px-4 py-2 rounded-lg bg-brand-gold text-brand-blue font-bold hover:bg-brand-goldHover transition-colors flex items-center gap-2 text-sm ${isCloning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                            {isCloning ? <Loader2 size={16} className="animate-spin" /> : <Fingerprint size={16} />}
+                            {isCloning ? 'Đang tạo...' : 'Tạo giọng ngay'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+      )}
+
       {/* API SETTINGS MODAL */}
       {showSettings && (
           <div 
@@ -1611,6 +1847,13 @@ const App: React.FC = () => {
                         <X size={20} />
                     </button>
                 </div>
+
+                <div className="bg-blue-900/20 border border-blue-500/30 p-3 rounded-lg mb-4 flex gap-2">
+                    <ShieldAlert size={20} className="text-blue-400 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-gray-400">
+                        API Key của bạn được lưu trữ an toàn trong <strong>Local Storage</strong> của trình duyệt này và không bao giờ được gửi đi đâu khác ngoài Google/ElevenLabs.
+                    </p>
+                </div>
                 
                 <form onSubmit={handleSaveApiKeys} className="space-y-4">
                     <div className="space-y-2">
@@ -1627,30 +1870,53 @@ const App: React.FC = () => {
 
                     <div className="space-y-2">
                         <label className="text-sm font-medium text-gray-300 block">ElevenLabs API Key (cho giọng ElevenLabs)</label>
-                        <input 
-                            type="password" 
-                            value={apiKeys.elevenLabs || ''}
-                            onChange={e => setApiKeys({...apiKeys, elevenLabs: e.target.value})}
-                            placeholder="Nhập khóa API ElevenLabs..."
-                            className="w-full bg-brand-blue border border-gray-600 rounded-lg p-3 text-sm focus:ring-2 focus:ring-brand-gold focus:outline-none"
-                        />
-                         <p className="text-xs text-gray-500">Dùng để kích hoạt các giọng đọc truyền cảm cao cấp.</p>
+                        <div className="flex gap-2">
+                            <input 
+                                type="password" 
+                                value={apiKeys.elevenLabs || ''}
+                                onChange={e => setApiKeys({...apiKeys, elevenLabs: e.target.value})}
+                                placeholder="Nhập khóa API ElevenLabs..."
+                                className="w-full bg-brand-blue border border-gray-600 rounded-lg p-3 text-sm focus:ring-2 focus:ring-brand-gold focus:outline-none"
+                            />
+                             <button 
+                                type="button"
+                                onClick={handleFetchElevenLabsVoices}
+                                disabled={isLoadingVoices || !apiKeys.elevenLabs}
+                                className="bg-brand-blue border border-gray-600 hover:bg-gray-700 text-brand-gold px-3 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="Kiểm tra Key & Tải danh sách giọng"
+                            >
+                                {isLoadingVoices ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                            </button>
+                        </div>
+                         <p className="text-xs text-gray-500 flex justify-between">
+                             <span>Dùng để kích hoạt các giọng đọc truyền cảm.</span>
+                             {fetchedElevenLabsVoices.length > 0 && <span className="text-green-400">Đã tải {fetchedElevenLabsVoices.length} giọng.</span>}
+                         </p>
                     </div>
 
-                    <div className="pt-4 flex justify-end gap-3">
+                    <div className="pt-4 flex justify-between gap-3">
                          <button 
                             type="button"
-                            onClick={() => setShowSettings(false)}
-                            className="px-4 py-2 rounded-lg text-gray-300 bg-gray-700 hover:bg-gray-600 transition-colors text-sm"
+                            onClick={handleClearApiKeys}
+                            className="px-4 py-2 rounded-lg text-red-400 hover:bg-red-900/20 hover:text-red-300 transition-colors text-sm flex items-center gap-1"
                         >
-                            Đóng
+                            <Trash2 size={14} /> Xóa Key đã lưu
                         </button>
-                        <button 
-                            type="submit"
-                            className="px-4 py-2 rounded-lg bg-brand-gold text-brand-blue font-bold hover:bg-brand-goldHover transition-colors flex items-center gap-2 text-sm"
-                        >
-                            <Save size={16} /> Lưu cài đặt
-                        </button>
+                        <div className="flex gap-2">
+                            <button 
+                                type="button"
+                                onClick={() => setShowSettings(false)}
+                                className="px-4 py-2 rounded-lg text-gray-300 bg-gray-700 hover:bg-gray-600 transition-colors text-sm"
+                            >
+                                Đóng
+                            </button>
+                            <button 
+                                type="submit"
+                                className="px-4 py-2 rounded-lg bg-brand-gold text-brand-blue font-bold hover:bg-brand-goldHover transition-colors flex items-center gap-2 text-sm"
+                            >
+                                <Save size={16} /> Lưu cài đặt
+                            </button>
+                        </div>
                     </div>
                 </form>
             </div>

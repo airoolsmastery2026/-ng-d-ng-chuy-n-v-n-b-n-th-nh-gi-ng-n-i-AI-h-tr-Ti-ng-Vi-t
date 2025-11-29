@@ -1,5 +1,6 @@
 
 // Service to handle Google Cloud TTS and ElevenLabs API calls
+import { VoiceOption } from '../types';
 
 function decodeBase64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = window.atob(base64);
@@ -104,4 +105,71 @@ export const generateElevenLabsSpeech = async (
   const base64 = window.btoa(binary);
 
   return { audioBuffer: arrayBuffer, base64 };
+};
+
+// --- ELEVENLABS VOICE CLONING ---
+export const addElevenLabsVoice = async (
+  name: string,
+  files: File[],
+  apiKey: string,
+  description: string = ""
+): Promise<{ voice_id: string }> => {
+  if (!apiKey) throw new Error("Vui lòng nhập ElevenLabs API Key.");
+  
+  const url = "https://api.elevenlabs.io/v1/voices/add";
+  const formData = new FormData();
+  
+  formData.append('name', name);
+  if (description) formData.append('description', description);
+  
+  // Append files (API expects 'files' key)
+  files.forEach((file) => {
+    formData.append('files', file);
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey
+      // Note: Do NOT set Content-Type to multipart/form-data here; 
+      // the browser sets it automatically with the boundary.
+    },
+    body: formData
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+     throw new Error(data.detail?.message || "Lỗi khi tạo giọng Clone (ElevenLabs).");
+  }
+
+  return { voice_id: data.voice_id };
+};
+
+// --- GET ELEVENLABS VOICES ---
+export const getElevenLabsVoices = async (apiKey: string): Promise<VoiceOption[]> => {
+    if (!apiKey) throw new Error("Vui lòng nhập ElevenLabs API Key.");
+
+    const url = "https://api.elevenlabs.io/v1/voices";
+    const response = await fetch(url, {
+        method: "GET",
+        headers: {
+            "xi-api-key": apiKey
+        }
+    });
+
+    if (!response.ok) {
+        throw new Error("Lỗi khi tải danh sách giọng ElevenLabs. Vui lòng kiểm tra API Key.");
+    }
+
+    const data = await response.json();
+    
+    // Map API response to VoiceOption interface
+    return data.voices.map((v: any) => ({
+        id: v.voice_id,
+        name: `ElevenLabs - ${v.name}`,
+        gender: v.labels?.gender === 'female' ? 'female' : 'male', // Simple mapping
+        description: v.category === 'cloned' ? '(Giọng Clone)' : (v.labels?.description || v.category || 'Giọng AI cao cấp'),
+        provider: 'elevenlabs'
+    }));
 };
