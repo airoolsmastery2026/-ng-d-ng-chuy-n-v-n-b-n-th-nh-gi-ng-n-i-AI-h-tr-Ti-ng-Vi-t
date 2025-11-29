@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Facebook, Youtube, MessageCircle, Info } from 'lucide-react';
 
@@ -27,20 +28,40 @@ const Footer: React.FC = () => {
             Liên hệ & Cộng đồng
           </h3>
           <div className="space-y-3">
-            <a href="#" className="flex items-center gap-3 hover:text-white transition-colors group">
-              <span className="bg-blue-600 p-1.5 rounded-full text-white group-hover:scale-110 transition-transform">
+            {/* Zalo Link - Thay href bằng link nhóm Zalo của bạn */}
+            <a 
+              href="https://zalo.me/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 hover:text-white transition-colors group"
+            >
+              <span className="bg-blue-600 p-1.5 rounded-full text-white group-hover:scale-110 transition-transform font-bold text-xs w-7 h-7 flex items-center justify-center">
                 Z
               </span>
               <span>Nhóm Zalo Hỗ Trợ</span>
             </a>
-            <a href="#" className="flex items-center gap-3 hover:text-white transition-colors group">
-              <span className="bg-blue-700 p-1.5 rounded-full text-white group-hover:scale-110 transition-transform">
+
+            {/* Facebook Link - Thay href bằng link nhóm Facebook của bạn */}
+            <a 
+              href="https://www.facebook.com/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 hover:text-white transition-colors group"
+            >
+              <span className="bg-blue-700 p-1.5 rounded-full text-white group-hover:scale-110 transition-transform w-7 h-7 flex items-center justify-center">
                 <Facebook size={16} />
               </span>
               <span>Cộng đồng Facebook</span>
             </a>
-            <a href="#" className="flex items-center gap-3 hover:text-white transition-colors group">
-              <span className="bg-red-600 p-1.5 rounded-full text-white group-hover:scale-110 transition-transform">
+
+            {/* YouTube Link - Thay href bằng link kênh YouTube của bạn */}
+            <a 
+              href="https://www.youtube.com/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 hover:text-white transition-colors group"
+            >
+              <span className="bg-red-600 p-1.5 rounded-full text-white group-hover:scale-110 transition-transform w-7 h-7 flex items-center justify-center">
                 <Youtube size={16} />
               </span>
               <span>Kênh YouTube Hướng Dẫn</span>
