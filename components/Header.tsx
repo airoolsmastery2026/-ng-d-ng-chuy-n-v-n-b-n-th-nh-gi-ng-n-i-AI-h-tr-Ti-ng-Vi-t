@@ -14,6 +14,9 @@ const Header: React.FC = () => {
       <p className="text-gray-300 text-lg md:text-xl font-light">
         Ứng dụng chuyển văn bản thành giọng nói AI – hỗ trợ Tiếng Việt
       </p>
+      <p className="text-brand-gold/90 text-sm md:text-base font-bold uppercase tracking-wide pt-2">
+        Tác giả: NGUYỄN HỮU HƯƠNG &nbsp;|&nbsp; SĐT: 0328721724
+      </p>
     </header>
   );
 };
