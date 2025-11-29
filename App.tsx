@@ -49,8 +49,33 @@ import {
   PlusCircle,
   Fingerprint,
   ShieldAlert,
-  RefreshCw
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
+
+// Helper to get friendly error messages
+const getFriendlyErrorMessage = (error: any): string => {
+    const msg = (error?.message || '').toLowerCase();
+    
+    if (msg.includes('key') || msg.includes('auth') || msg.includes('permission') || msg.includes('401') || msg.includes('403')) {
+        return "Khóa API không hợp lệ hoặc thiếu quyền truy cập. Vui lòng kiểm tra lại trong Cài đặt API.";
+    }
+    if (msg.includes('quota') || msg.includes('rate') || msg.includes('limit') || msg.includes('429')) {
+        return "Đã hết hạn mức sử dụng (Quota) của dịch vụ này. Vui lòng chờ hoặc đổi API Key khác.";
+    }
+    if (msg.includes('network') || msg.includes('fetch') || msg.includes('connect') || msg.includes('internet')) {
+        return "Không thể kết nối đến máy chủ. Vui lòng kiểm tra đường truyền internet của bạn.";
+    }
+    if (msg.includes('content') || msg.includes('safety') || msg.includes('blocked')) {
+        return "Nội dung văn bản bị hệ thống AI từ chối xử lý (có thể do vi phạm chính sách nội dung).";
+    }
+    if (msg.includes('found') || msg.includes('404')) {
+        return "Dịch vụ hoặc giọng đọc này hiện không khả dụng.";
+    }
+    
+    // Default fallback message if no specific keyword match
+    return "Hệ thống gặp sự cố gián đoạn. Vui lòng thử lại sau ít phút.";
+};
 
 // Main Component
 const App: React.FC = () => {
@@ -180,6 +205,7 @@ const App: React.FC = () => {
   // Common State
   const [loadingState, setLoadingState] = useState<LoadingState>(LoadingState.IDLE);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
   
   // Audio State (TTS Result - Single Mode)
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -255,7 +281,7 @@ const App: React.FC = () => {
           alert(`Đã tải thành công ${voices.length} giọng từ tài khoản ElevenLabs của bạn!`);
       } catch (error: any) {
           console.error(error);
-          alert("Lỗi tải giọng: " + error.message);
+          alert(getFriendlyErrorMessage(error));
       } finally {
           setIsLoadingVoices(false);
       }
@@ -302,7 +328,7 @@ const App: React.FC = () => {
           alert("Tạo giọng thành công! Giọng mới đã được chọn.");
 
       } catch (error: any) {
-          alert("Lỗi tạo giọng: " + error.message);
+          alert("Lỗi tạo giọng: " + getFriendlyErrorMessage(error));
       } finally {
           setIsCloning(false);
       }
@@ -331,7 +357,7 @@ const App: React.FC = () => {
       setSelectedLanguage(translationTargetLang);
     } catch (error: any) {
       console.error(error);
-      alert("Lỗi dịch thuật: " + error.message);
+      alert("Lỗi dịch thuật: " + getFriendlyErrorMessage(error));
     } finally {
       setIsTranslating(false);
     }
@@ -367,41 +393,65 @@ const App: React.FC = () => {
     }
   };
 
-  // CENTRALIZED SPEECH GENERATION
+  // CENTRALIZED SPEECH GENERATION WITH FALLBACK
   const performSpeechGeneration = async (textToSpeak: string, voice: VoiceOption): Promise<AudioBuffer> => {
       const langName = SUPPORTED_LANGUAGES.find(l => l.code === selectedLanguage)?.name || 'Vietnamese';
       const langCode = selectedLanguage;
       const ctx = getAudioContext();
-
+      
       let rawBuffer: ArrayBuffer;
 
-      if (voice.provider === 'google') {
-          if (!apiKeys.googleCloud) throw new Error("Bạn chưa nhập Google API Key. Vui lòng vào mục Cài đặt API.");
-          const res = await generateGoogleSpeech(textToSpeak, voice.id, apiKeys.googleCloud, speed, langCode);
-          rawBuffer = res.audioBuffer;
-      } else if (voice.provider === 'elevenlabs') {
-          if (!apiKeys.elevenLabs) throw new Error("Bạn chưa nhập ElevenLabs API Key. Vui lòng vào mục Cài đặt API.");
-          // ElevenLabs uses its own models, usually returns MP3. We decode it.
-          const res = await generateElevenLabsSpeech(textToSpeak, voice.id, apiKeys.elevenLabs);
-          const decoded = await ctx.decodeAudioData(res.audioBuffer);
-          return decoded; // Return directly as it's already decoded
-      } else {
-          // Gemini (Default)
-          const res = await generateSpeech(textToSpeak, voice.id, langName, speed);
-          rawBuffer = res.audioBuffer;
-      }
+      // Helper for decoding
+      const decode = async (buffer: ArrayBuffer) => {
+           try {
+              const bufferCopy = buffer.slice(0);
+              return await ctx.decodeAudioData(bufferCopy);
+          } catch (e) {
+              return convertPCMToAudioBuffer(buffer, ctx);
+          }
+      };
 
-      // For Gemini and Google (returning Raw/Wav bytes), we use custom converter or standard decode if header exists
-      // Gemini returns RAW PCM (no header). Google returns WAV (with header) if LINEAR16 requested but usually we treat as arraybuffer.
-      
       try {
-          // Try standard decode first (Works for Google WAV, ElevenLabs MP3)
-          // Clone buffer because decodeAudioData detaches it
-          const bufferCopy = rawBuffer.slice(0);
-          return await ctx.decodeAudioData(bufferCopy);
-      } catch (e) {
-          // Fallback to Raw PCM convert (For Gemini which sends raw PCM)
-          return convertPCMToAudioBuffer(rawBuffer, ctx);
+          // --- PRIMARY ATTEMPT ---
+          if (voice.provider === 'google') {
+              if (!apiKeys.googleCloud) throw new Error("API Key Google Cloud chưa được cấu hình.");
+              const res = await generateGoogleSpeech(textToSpeak, voice.id, apiKeys.googleCloud, speed, langCode);
+              rawBuffer = res.audioBuffer;
+          } else if (voice.provider === 'elevenlabs') {
+              if (!apiKeys.elevenLabs) throw new Error("API Key ElevenLabs chưa được cấu hình.");
+              const res = await generateElevenLabsSpeech(textToSpeak, voice.id, apiKeys.elevenLabs);
+              const decoded = await ctx.decodeAudioData(res.audioBuffer);
+              return decoded;
+          } else {
+              // Gemini (Default)
+              const res = await generateSpeech(textToSpeak, voice.id, langName, speed);
+              rawBuffer = res.audioBuffer;
+          }
+          return await decode(rawBuffer);
+
+      } catch (primaryError: any) {
+          console.warn(`Primary API (${voice.provider}) failed:`, primaryError);
+          
+          // --- FALLBACK LOGIC ---
+          // If Gemini failed, or no alternative available, throw friendly error
+          if (voice.provider === 'gemini') {
+              throw new Error(getFriendlyErrorMessage(primaryError));
+          }
+
+          // If Google/ElevenLabs failed, Try Gemini fallback
+          setWarningMessage(`Dịch vụ ${voice.provider === 'elevenlabs' ? 'ElevenLabs' : 'Google'} gặp sự cố. Đang tự động chuyển sang giọng đọc dự phòng (Gemini)...`);
+          
+          try {
+              // Attempt to find a Gemini voice with same gender
+              const fallbackVoice = GEMINI_VOICES.find(v => v.gender === voice.gender) || GEMINI_VOICES[0];
+              
+              console.log(`Falling back to Gemini Voice: ${fallbackVoice.name}`);
+              const res = await generateSpeech(textToSpeak, fallbackVoice.id, langName, speed);
+              return await decode(res.audioBuffer);
+          } catch (fallbackError: any) {
+              // If fallback also fails, throw combined error
+              throw new Error(getFriendlyErrorMessage(primaryError));
+          }
       }
   };
 
@@ -424,7 +474,7 @@ const App: React.FC = () => {
       };
     } catch (error: any) {
       console.error("Preview error:", error);
-      alert(error.message);
+      alert(error.message); // Friendly message already processed in performSpeechGeneration logic if needed, but catch blocks handle it
       setIsPreviewing(false);
     }
   };
@@ -441,6 +491,7 @@ const App: React.FC = () => {
 
     setLoadingState(LoadingState.PROCESSING);
     setErrorMessage(null);
+    setWarningMessage(null);
     setAudioUrl(null);
     setAudioBuffer(null);
     setOriginalVoiceBuffer(null);
@@ -460,7 +511,7 @@ const App: React.FC = () => {
       setLoadingState(LoadingState.SUCCESS);
     } catch (error: any) {
       console.error(error);
-      setErrorMessage(error.message || "Có lỗi xảy ra khi tạo giọng nói.");
+      setErrorMessage(error.message); // This will now be the friendly message
       setLoadingState(LoadingState.ERROR);
     }
   };
@@ -528,6 +579,11 @@ const App: React.FC = () => {
     
     let blob: Blob;
     let filename = `tts-master-${Date.now()}`;
+    
+    const isMixed = bgMusicBuffer !== null && audioBuffer !== originalVoiceBuffer;
+    if (isMixed) {
+        filename += '_mixed';
+    }
 
     try {
       if (downloadFormat === 'mp3') {
@@ -683,7 +739,7 @@ const App: React.FC = () => {
 
             await delay(1000); 
             
-            // USE CENTRALIZED FUNCTION
+            // USE CENTRALIZED FUNCTION (now includes friendly error & fallback)
             const buffer = await performSpeechGeneration(textContent, selectedVoice);
             
             currentQueue[i].progress = 80;
@@ -699,7 +755,7 @@ const App: React.FC = () => {
         } catch (error: any) {
             console.error(`Error processing file ${currentQueue[i].file.name}:`, error);
             currentQueue[i].status = 'error';
-            currentQueue[i].errorMsg = error.message;
+            currentQueue[i].errorMsg = error.message; // Friendly message automatically propagated
         }
 
         setBatchQueue([...currentQueue]);
@@ -744,7 +800,7 @@ const App: React.FC = () => {
         } catch (error: any) {
             console.error(`Error processing STT file ${currentQueue[i].file.name}:`, error);
             currentQueue[i].status = 'error';
-            currentQueue[i].errorMsg = error.message;
+            currentQueue[i].errorMsg = getFriendlyErrorMessage(error);
         }
 
         setBatchQueue([...currentQueue]);
@@ -838,7 +894,7 @@ const App: React.FC = () => {
         setLoadingState(LoadingState.SUCCESS);
     } catch (error: any) {
         console.error(error);
-        setErrorMessage(error.message || "Lỗi khi chuyển đổi giọng nói thành văn bản.");
+        setErrorMessage(getFriendlyErrorMessage(error));
         setLoadingState(LoadingState.ERROR);
     }
   };
@@ -915,6 +971,7 @@ const App: React.FC = () => {
                                             style={{ width: `${item.progress}%` }}
                                         ></div>
                                     </div>
+                                    {item.status === 'error' && <p className="text-[10px] text-red-400 mt-1 truncate">{item.errorMsg}</p>}
                                 </div>
                             </div>
                             <div className="flex-shrink-0 flex items-center gap-2">
@@ -1359,6 +1416,13 @@ const App: React.FC = () => {
 
                             {loadingState === LoadingState.SUCCESS && audioUrl && (
                             <div className="w-full space-y-6 animate-fade-in">
+                                {warningMessage && (
+                                    <div className="bg-yellow-900/30 border border-yellow-600 text-yellow-200 p-3 rounded-lg flex items-start gap-2 text-xs">
+                                        <AlertTriangle size={16} className="mt-0.5 flex-shrink-0 text-yellow-400" />
+                                        <span>{warningMessage}</span>
+                                    </div>
+                                )}
+
                                 <div className="bg-brand-blue p-6 rounded-xl border border-gray-600 text-center">
                                 <div className="mb-2 text-green-400 font-medium flex items-center justify-center gap-2">
                                     <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
@@ -1453,7 +1517,7 @@ const App: React.FC = () => {
                                     className="w-full py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-medium flex items-center justify-center gap-2 transition-colors border border-gray-600 hover:border-brand-gold"
                                 >
                                     <Download size={20} className="text-blue-400" />
-                                    Tải về WAV (Chất lượng cao)
+                                    {bgMusicBuffer && audioBuffer !== originalVoiceBuffer ? 'Tải bản ghép (WAV)' : 'Tải về WAV'}
                                 </button>
 
                                 <button 
@@ -1461,7 +1525,7 @@ const App: React.FC = () => {
                                     className="w-full py-3 px-4 bg-brand-blue hover:bg-gray-800 rounded-lg text-brand-gold font-medium flex items-center justify-center gap-2 transition-colors border border-brand-gold/30 hover:border-brand-gold"
                                 >
                                     <Download size={20} />
-                                    Tải về MP3
+                                    {bgMusicBuffer && audioBuffer !== originalVoiceBuffer ? 'Tải bản ghép (MP3)' : 'Tải về MP3'}
                                 </button>
                                 </div>
                             </div>

@@ -1,5 +1,4 @@
 
-
 // Utility to create a WAV header for PCM data
 // Gemini output is typically raw PCM at 24kHz.
 
@@ -96,22 +95,31 @@ export const createMp3Blob = (audioBuffer: AudioBuffer): Blob => {
   // Initialize encoder (Stereo or Mono depending on channels, 128kbps)
   const mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, 128);
   
-  // Convert Float32 [-1, 1] to Int16 for lamejs
-  const channelData = audioBuffer.getChannelData(0); // Assuming Mono for Gemini TTS usually
-  const samples = new Int16Array(channelData.length);
+  // Encode
+  const mp3Data = [];
+  const samplesLeft = new Int16Array(audioBuffer.length);
+  const samplesRight = channels > 1 ? new Int16Array(audioBuffer.length) : undefined;
   
-  for (let i = 0; i < channelData.length; i++) {
-    // Clamp and scale
-    const s = Math.max(-1, Math.min(1, channelData[i]));
-    samples[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  // Helper to convert float to int16
+  const convertBuffer = (float32Arr: Float32Array, int16Arr: Int16Array) => {
+      for (let i = 0; i < float32Arr.length; i++) {
+          const s = Math.max(-1, Math.min(1, float32Arr[i]));
+          int16Arr[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+  };
+
+  convertBuffer(audioBuffer.getChannelData(0), samplesLeft);
+  if (channels > 1 && samplesRight) {
+      convertBuffer(audioBuffer.getChannelData(1), samplesRight);
   }
 
-  const mp3Data = [];
-  
-  // Encode
-  // For mono, encodeBuffer takes 1 array. For stereo, it takes 2.
-  // Gemini TTS is generally mono.
-  const mp3buf = mp3encoder.encodeBuffer(samples);
+  let mp3buf;
+  if (channels === 1) {
+      mp3buf = mp3encoder.encodeBuffer(samplesLeft);
+  } else {
+      mp3buf = mp3encoder.encodeBuffer(samplesLeft, samplesRight);
+  }
+
   if (mp3buf.length > 0) {
     mp3Data.push(mp3buf);
   }
@@ -128,6 +136,7 @@ export const createMp3Blob = (audioBuffer: AudioBuffer): Blob => {
  * Mixes two audio buffers (Voice + Background Music).
  * The output duration is determined by the Voice buffer length.
  * Background music loops if shorter than voice.
+ * Automatically upgrades to Stereo if Background Music is Stereo.
  */
 export const mixAudioBuffers = (
   voiceBuffer: AudioBuffer,
@@ -136,7 +145,8 @@ export const mixAudioBuffers = (
   voiceVolume: number = 1.0,
   bgVolume: number = 0.5
 ): AudioBuffer => {
-  const channels = voiceBuffer.numberOfChannels; // Typically 1 for TTS
+  // Determine output channels: If either voice or BG is stereo, output is stereo.
+  const channels = Math.max(voiceBuffer.numberOfChannels, bgBuffer.numberOfChannels);
   const length = voiceBuffer.length;
   const sampleRate = voiceBuffer.sampleRate;
   
@@ -144,9 +154,12 @@ export const mixAudioBuffers = (
 
   for (let i = 0; i < channels; i++) {
     const outputData = outputBuffer.getChannelData(i);
-    const voiceData = voiceBuffer.getChannelData(i);
     
-    // Handle BG channels: Use channel 0 if BG is mono but Voice is stereo, or mapping 1:1
+    // Map Voice Channel: If Voice is mono but Output is Stereo, use Voice Ch 0 for both output channels.
+    const voiceChannelIndex = i < voiceBuffer.numberOfChannels ? i : 0;
+    const voiceData = voiceBuffer.getChannelData(voiceChannelIndex);
+    
+    // Map BG Channel: Similar logic, reuse channel 0 if BG is mono
     const bgChannelIndex = i < bgBuffer.numberOfChannels ? i : 0;
     const bgData = bgBuffer.getChannelData(bgChannelIndex);
 
